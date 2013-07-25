@@ -19,6 +19,7 @@ import optparse
 
 from mapproxy.config import local_base_config
 from mapproxy.config.loader import load_configuration, ConfigurationError
+from mapproxy.grid import grid_coverage_ratio
 from mapproxy.seed.config import (
     load_seed_tasks_conf, SeedConfigurationError, SeedingConfiguration
 )
@@ -28,22 +29,6 @@ def format_conf_value(value):
         # YAMl only supports lists, convert for clarity
         value = list(value)
     return repr(value)
-
-def _area_from_bbox(bbox):
-    width = bbox[2] - bbox[0]
-    height = bbox[3] - bbox[1]
-    return width * height
-
-def grid_coverage_ratio(bbox, srs, coverage):
-    coverage = coverage.transform_to(srs)
-    grid_area = _area_from_bbox(bbox)
-
-    if coverage.geom:
-        coverage_area = coverage.geom.area
-    else:
-        coverage_area = _area_from_bbox(coverage.bbox)
-
-    return coverage_area / grid_area
 
 def display_grid(grid_conf, coverage=None):
     print '%s:' % (grid_conf.conf['name'],)

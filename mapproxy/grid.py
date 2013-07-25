@@ -1145,3 +1145,20 @@ def merge_resolution_range(a, b):
         return resolution_range(min_res=max_with_none(a.min_res, b.min_res),
             max_res=min(a.max_res, b.max_res))
     return None
+
+def area_from_bbox(bbox):
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    return width * height
+
+def grid_coverage_ratio(bbox, coverage, srs):
+    coverage = coverage.transform_to(srs)
+    grid_area = area_from_bbox(bbox)
+
+    if coverage.geom:
+        coverage_area = coverage.geom.area
+    else:
+        coverage_area = area_from_bbox(coverage.bbox)
+
+    return coverage_area / grid_area
+
