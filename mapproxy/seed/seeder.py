@@ -184,10 +184,13 @@ class TileSeedCounter(object):
             self._generated_tiles_per_level[current_level] = 0
         return expectation
 
-    def level_percentage(self, level):
-        return self._generated_tiles_per_level[level] / self._expected_tiles_per_level[level] * 100
+    def update_expected_tiles(self, level):
+        gen_ex_diff = self._generated_tiles_per_level[level] - self._expected_tiles_per_level[level]
+        if (gen_ex_diff > 0):
+            self._expected_tiles += gen_ex_diff
+            self._expected_tiles_per_level[level] += gen_ex_diff
 
-    def add(self, level):
+    def count_meta_tiles(self, level):
         self._generated_tiles += 1
         self._generated_tiles_per_level[level] += 1
 
@@ -297,7 +300,6 @@ class TileWalker(object):
                 self._walk(bbox, self.task.levels)
             except StopProcess:
                 pass
-        
         self.report_progress(self.task.levels[0], self.task.coverage.bbox)
 
     def _walk(self, cur_bbox, levels, current_level=0, all_subtiles=False):
@@ -367,11 +369,13 @@ class TileWalker(object):
                                     t is not None and
                                     self.tile_mgr.is_stale(t)]
             if handle_tiles:
-                self.tile_counter.add(current_level-1)
+                self.tile_counter.count_meta_tiles(current_level-1)
                 self.worker_pool.process(handle_tiles, self.seed_progress)
 
             if not levels:
-                self.seed_progress.step_forward(total_subtiles)
+                self.seed_progress.step_forward(total_subtiles)                
+
+        self.tile_counter.update_expected_tiles(current_level-1)
 
         if len(levels) >= 4:
             # call cleanup to close open caches
