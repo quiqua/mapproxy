@@ -165,7 +165,7 @@ class ProgressLog(object):
             self.out.flush()
             self.lastlog = time.time()
 
-    def log_progress(self, progress, level, bbox, tiles):
+    def log_progress(self, progress, level, bbox, tiles, expected_tiles):
         if self.progress_store and self.current_task_id:
             self.progress_store.add(self.current_task_id,
                 progress.current_progress_identifier())
@@ -173,9 +173,9 @@ class ProgressLog(object):
 
         if self.silent:
             return
-        self.out.write('[%s] %2s %6.2f%% %s (%d tiles) ETA: %s\n' % (
+        self.out.write('[%s] %2s %6.2f%% %s (%d tiles / %d expected tiles) ETA: %s\n' % (
             timestamp(), level, progress.progress*100,
-            format_bbox(bbox), tiles, progress.eta))
+            format_bbox(bbox), tiles, expected_tiles, progress.eta))
         self.out.flush()
 
 
