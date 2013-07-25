@@ -19,7 +19,7 @@ from contextlib import contextmanager
 import time
 
 from mapproxy.config import base_config
-from mapproxy.grid import MetaGrid
+from mapproxy.grid import MetaGrid, grid_coverage_ratio
 from mapproxy.source import SourceError
 from mapproxy.config import local_base_config
 from mapproxy.util.ext.itertools import izip_longest
@@ -142,6 +142,55 @@ class TileCleanupWorker(TileWorker):
             with self.tile_mgr.session():
                 self.tile_mgr.remove_tile_coords(tiles)
 
+class TileSeedCounter(object):
+    def __init__(self, coverage, levels, grid):
+        self.coverage = coverage
+        self.levels = levels
+        self.grid = grid
+        self._tiles_per_meta_tile = self.grid.meta_size[0] * self.grid.meta_size[1]    
+        self._generated_tiles = 0
+        self._generated_tiles_per_level = {}
+        self._grid_coverage_ratio = None 
+        self._expected_tiles_per_level = {}
+        self._expected_tiles = self._calculate_expected_tiles() 
+
+    @property
+    def coverage_ratio(self):
+        if self._grid_coverage_ratio is None:
+            coverage = self.coverage.transform_to(self.grid.grid.srs)
+            self._grid_coverage_ratio = grid_coverage_ratio(coverage.bbox, coverage, self.grid.grid.srs)            
+        return self._grid_coverage_ratio
+
+    @property
+    def expected_tiles(self):
+        return self._expected_tiles * self._tiles_per_meta_tile
+
+    @property
+    def generated_tiles(self):
+        return self._generated_tiles * self._tiles_per_meta_tile
+
+    def _calculate_expected_tiles(self):
+        coverage = self.coverage.transform_to(self.grid.grid.srs)
+        expectation = 0
+        for current_level in self.levels:
+            bbox_, tiles, subtiles = self.grid.get_affected_level_tiles(coverage.bbox, current_level)
+            total_subtiles = ( tiles[0] * tiles[1] ) * self.coverage_ratio
+            if total_subtiles < 1:
+                total_subtiles = 1
+            else:
+                total_subtiles = int(round(total_subtiles, 0))
+            expectation += total_subtiles
+            self._expected_tiles_per_level[current_level] = total_subtiles
+            self._generated_tiles_per_level[current_level] = 0
+        return expectation
+
+    def level_percentage(self, level):
+        return self._generated_tiles_per_level[level] / self._expected_tiles_per_level[level] * 100
+
+    def add(self, level):
+        self._generated_tiles += 1
+        self._generated_tiles_per_level[level] += 1
+
 class SeedProgress(object):
     def __init__(self, old_progress_identifier=None):
         self.progress = 0.0
@@ -233,10 +282,9 @@ class TileWalker(object):
         num_seed_levels = len(task.levels)
         self.report_till_level = task.levels[int(num_seed_levels * 0.8)]
         meta_size = self.tile_mgr.meta_grid.meta_size if self.tile_mgr.meta_grid else (1, 1)
-        self.tiles_per_metatile = meta_size[0] * meta_size[1]
         self.grid = MetaGrid(self.tile_mgr.grid, meta_size=meta_size, meta_buffer=0)
-        self.count = 0
         self.seed_progress = seed_progress or SeedProgress()
+        self.tile_counter = TileSeedCounter(self.task.coverage, self.task.levels, self.grid)
 
     def walk(self):
         assert self.handle_stale or self.handle_uncached
@@ -249,6 +297,7 @@ class TileWalker(object):
                 self._walk(bbox, self.task.levels)
             except StopProcess:
                 pass
+        
         self.report_progress(self.task.levels[0], self.task.coverage.bbox)
 
     def _walk(self, cur_bbox, levels, current_level=0, all_subtiles=False):
@@ -259,7 +308,9 @@ class TileWalker(object):
                              intersections with bbox/geom
         """
         bbox_, tiles, subtiles = self.grid.get_affected_level_tiles(cur_bbox, current_level)
+
         total_subtiles = tiles[0] * tiles[1]
+
         if len(levels) < self.skip_geoms_for_last_levels:
             # do not filter in last levels
             all_subtiles = True
@@ -279,7 +330,6 @@ class TileWalker(object):
             levels = levels[1:]
             process = True            
         current_level += 1
-
         for i, (subtile, sub_bbox, intersection) in enumerate(subtiles):
             if subtile is None: # no intersection
                 self.seed_progress.step_forward(total_subtiles)
@@ -297,7 +347,8 @@ class TileWalker(object):
                     else:
                         self._walk(sub_bbox, levels, current_level=current_level,
                             all_subtiles=all_subtiles)
-
+                       
+            # sub_ar += self.grid_coverage_ratio(sub_bbox, self.tile_mgr.grid.srs, self.task.coverage)
             if not process:
                 continue
 
@@ -316,7 +367,7 @@ class TileWalker(object):
                                     t is not None and
                                     self.tile_mgr.is_stale(t)]
             if handle_tiles:
-                self.count += 1
+                self.tile_counter.add(current_level-1)
                 self.worker_pool.process(handle_tiles, self.seed_progress)
 
             if not levels:
@@ -330,7 +381,7 @@ class TileWalker(object):
     def report_progress(self, level, bbox):
         if self.progress_logger:
             self.progress_logger.log_progress(self.seed_progress, level, bbox,
-                self.count * self.tiles_per_metatile)
+                self.tile_counter.generated_tiles, self.tile_counter.expected_tiles)
 
     def _filter_subtiles(self, subtiles, all_subtiles):
         """
